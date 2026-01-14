@@ -62,6 +62,22 @@ def display_query_result(columns, rows):
     else:
         st.info("No results returned")
 
+def logout():
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+
+
+st.sidebar.title("🧪 SQL Lab")
+
+if st.session_state.get("logged_in"):
+    st.sidebar.markdown(f"**Logged in as:** `{st.session_state.username}`")
+    role = "ADMIN" if st.session_state.username == ADMIN_USERNAME else "USER"
+    st.sidebar.caption(f"Role: {role}")
+    if st.sidebar.button("🚪 Logout"):
+        logout()
+
+
 # -----------------------------
 # LOGIN / REGISTER
 # -----------------------------

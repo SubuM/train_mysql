@@ -1,202 +1,224 @@
 import streamlit as st
-import requests
 from streamlit_ace import st_ace
+import pandas as pd
+import requests
 
-# =========================
-# CONFIG (SECRETS)
-# =========================
-API_BASE = st.secrets["API_BASE"]
-ADMIN_USERNAME = st.secrets["ADMIN_USERNAME"]
+# -------------------------------
+# Config & Secrets
+# -------------------------------
+st.set_page_config(page_title="SQL Lab", page_icon="🐬", layout="wide")
 
-st.set_page_config(page_title="SQL Lab", layout="wide")
+if 'AWS_IP' not in st.secrets:
+    st.error("🚨 Missing 'AWS_IP' in Secrets!")
+    st.stop()
 
-def fetch_admin_metadata():
-    r = requests.get(
-        f"{API_BASE}/admin/list",
-        params={"token": st.session_state.admin_token}
-    )
-    if r.status_code == 200:
-        st.session_state.admin_metadata = r.json()
-    else:
-        st.session_state.admin_metadata = {"databases": [], "users": []}
+# URL Safety Fix
+aws_ip = st.secrets['AWS_IP'].strip()
+if aws_ip.startswith("http://"): aws_ip = aws_ip.replace("http://", "")
+if aws_ip.startswith("https://"): aws_ip = aws_ip.replace("https://", "")
+    
+API_URL = f"http://{aws_ip}:8000"
 
-# =========================
-# SESSION STATE
-# =========================
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-    st.session_state.role = None
-    st.session_state.username = None
-    st.session_state.query_log = []
+ADMIN_TOKEN = st.secrets.get("ADMIN_TOKEN", "supersecretadmintoken")
+ROOT_PASSWORD = st.secrets.get("ROOT_PASSWORD", "super_root_password")
 
-if "admin_metadata" not in st.session_state:
-    st.session_state.admin_metadata = {"databases": [], "users": []}
-
-
-def logout():
-    st.session_state.clear()
-    st.rerun()
-
-
-def log_query(sql):
-    st.session_state.query_log.append(sql)
-
-
-# =========================
-# SIDEBAR
-# =========================
-st.sidebar.title("SQL Lab")
-if st.session_state.authenticated:
-    st.sidebar.success(f"Logged in as {st.session_state.username}")
-    if st.sidebar.button("Logout"):
-        logout()
-else:
-    mode = st.sidebar.radio("Mode", ["User Login", "Register", "Admin Login"])
-
-# =========================
-# USER REGISTER
-# =========================
-if not st.session_state.authenticated and mode == "Register":
-    st.header("🆕 Register")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
-    if st.button("Register"):
-        r = requests.post(f"{API_BASE}/register", json={"username": u, "password": p})
-        if r.status_code == 200:
-            st.success("User registered successfully")
+# -------------------------------
+# API Helpers
+# -------------------------------
+def api_register(username, password):
+    try:
+        res = requests.post(f"{API_URL}/register", json={"username": username, "password": password}, timeout=5)
+        if res.status_code == 200:
+            return {"status": "success", "message": "User registered successfully!"}
         else:
-            st.error(r.json().get("detail"))
+            try: err = res.json().get("detail", res.text)
+            except: err = res.text
+            return {"status": "error", "message": err}
+    except Exception as e:
+        return {"status": "error", "message": f"Connection Error: {e}"}
 
-# =========================
-# USER LOGIN
-# =========================
-if not st.session_state.authenticated and mode == "User Login":
-    st.header("🔐 User Login")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
-    if st.button("Login"):
-        r = requests.post(f"{API_BASE}/login", json={"username": u, "password": p})
-        if r.status_code == 200:
-            st.session_state.authenticated = True
-            st.session_state.username = u
-            st.session_state.password = p
-            st.session_state.role = "user"
-            st.rerun()
+def api_execute(username, password, sql):
+    try:
+        payload = {"username": username, "password": password, "sql": sql}
+        res = requests.post(f"{API_URL}/execute", json=payload, timeout=10)
+        
+        if res.status_code == 200:
+            return res.json()
+        elif res.status_code == 401:
+            return {"status": "error", "message": "Invalid Credentials"}
         else:
-            st.error("Invalid credentials")
+            try: err = res.json().get("detail", res.text)
+            except: err = res.text
+            return {"status": "error", "message": err}
+    except Exception as e:
+        return {"status": "error", "message": f"Connection Error: {e}"}
 
-# =========================
-# ADMIN LOGIN
-# =========================
-if not st.session_state.authenticated and mode == "Admin Login":
-    st.header("🛡️ Admin Login")
-    token = st.text_input("Admin Token", type="password")
-    if st.button("Login as Admin"):
-        r = requests.post(f"{API_BASE}/admin/login", params={"token": token})
-        if r.status_code == 200:
-            st.session_state.authenticated = True
-            st.session_state.username = ADMIN_USERNAME
-            st.session_state.role = "admin"
-            st.session_state.admin_token = token
-            fetch_admin_metadata()
-            st.rerun()
-        else:
-            st.error("Invalid admin token")
+def api_admin_list_users():
+    try:
+        res = requests.get(f"{API_URL}/admin/users?token={ADMIN_TOKEN}", timeout=5)
+        return res.json().get("users", []) if res.status_code == 200 else []
+    except:
+        return []
 
-# =========================
-# USER SQL CONSOLE
-# =========================
-if st.session_state.authenticated and st.session_state.role == "user":
-    st.header(f"🧪 SQL Console — {st.session_state.username}")
-    sql = st_ace(language="sql", height=200)
-    if st.button("Run Query"):
-        payload = {
-            "username": st.session_state.username,
-            "password": st.session_state.password,
-            "sql": sql
-        }
-        r = requests.post(f"{API_BASE}/execute", json=payload)
-        log_query(sql)
-        if r.status_code == 200:
-            st.write(r.json()["result"])
-        else:
-            st.error(r.json().get("detail"))
+def api_admin_delete(username):
+    try:
+        res = requests.post(f"{API_URL}/admin/delete_user", json={"token": ADMIN_TOKEN, "username": username}, timeout=5)
+        return res.status_code == 200
+    except:
+        return False
 
-    st.subheader("📜 Query Log")
-    for q in st.session_state.query_log:
-        st.code(q, language="sql")
+# -------------------------------
+# Session State
+# -------------------------------
+if "username" not in st.session_state: st.session_state["username"] = None
+if "password" not in st.session_state: st.session_state["password"] = None
+if "token" not in st.session_state: st.session_state["token"] = None
+if "query_history" not in st.session_state: st.session_state["query_history"] = []
+if "last_executed_sql" not in st.session_state: st.session_state["last_executed_sql"] = ""
 
-# =========================
-# ADMIN PANEL
-# =========================
-if st.session_state.authenticated and st.session_state.role == "admin":
-    st.header("👑 Admin Console")
+# -------------------------------
+# Sidebar: Auth
+# -------------------------------
+if st.session_state["token"] is None:
+    st.sidebar.subheader("Authentication")
+    login_option = st.sidebar.radio("Select Option", ["User Login", "New User Registration", "Admin Login"])
 
-    tabs = st.tabs(["SQL Console", "DB Explorer", "Manage Users"])
-
-    # ---- SQL Console
-    with tabs[0]:
-        st.subheader("🖥️ SQL Console")
-        sql = st_ace(language="sql", height=200)
-        db_selected = st.selectbox("Select target database (optional)", [""] + st.session_state.admin_metadata["databases"])
-
-        if st.button("Run Admin Query"):
-            payload = {
-                "token": st.session_state.admin_token,
-                "sql": sql,
-                "database": db_selected if db_selected else None
-            }
-            r = requests.post(f"{API_BASE}/admin/execute", json=payload)
-            log_query(f"[DB={db_selected}] {sql}")
-            if r.status_code == 200:
-                st.write(r.json()["result"])
+    if login_option == "User Login":
+        username = st.sidebar.text_input("Username", key="login_user")
+        password = st.sidebar.text_input("Password", type="password", key="login_pass")
+        if st.sidebar.button("Login"):
+            check = api_execute(username, password, "SELECT 1")
+            if check.get("status") == "success":
+                st.session_state["username"] = username
+                st.session_state["password"] = password
+                st.session_state["token"] = True
+                st.success(f"Logged in as {username}")
+                st.rerun()
             else:
-                st.error(r.json().get("detail"))
+                st.error("Invalid credentials")
 
-        st.subheader("📜 Admin Query Log")
-        for q in st.session_state.query_log:
-            st.code(q, language="sql")
+    elif login_option == "New User Registration":
+        new_user = st.sidebar.text_input("Username", key="reg_user")
+        new_password = st.sidebar.text_input("Password", type="password", key="reg_pass")
+        if st.sidebar.button("Register"):
+            result = api_register(new_user, new_password)
+            if result["status"] == "error":
+                st.error(result["message"])
+            else:
+                st.success(result["message"])
+                st.info("You can now login from the sidebar.")
 
-    # ---- DB Explorer
-    with tabs[1]:
-        st.subheader("🗂️ DB Explorer")
+    elif login_option == "Admin Login":
+        admin_token = st.sidebar.text_input("Admin Token", type="password", key="admin_token")
+        if st.sidebar.button("Admin Login"):
+            if admin_token == ADMIN_TOKEN:
+                st.session_state["username"] = "admin"
+                st.session_state["password"] = ROOT_PASSWORD
+                st.session_state["token"] = True
+                st.success("Admin logged in successfully!")
+                st.rerun()
+            else:
+                st.error("Invalid admin token")
 
-        if st.button("Refresh Metadata"):
-            fetch_admin_metadata()
+# -------------------------------
+# Main Dashboard
+# -------------------------------
+if st.session_state["token"]:
+    username = st.session_state["username"]
+    st.sidebar.success(f"Logged in as {username}")
+    if st.sidebar.button("Logout"):
+        st.session_state.clear()
+        st.rerun()
 
-        data = st.session_state.admin_metadata
+    # --- ADMIN DASHBOARD ---
+    if username == "admin":
+        st.subheader("Admin Dashboard")
+        tabs = st.tabs(["List Users", "Manage Users", "SQL Console"])
+        
+        with tabs[0]:
+            st.write("All users:")
+            users = api_admin_list_users()
+            st.write(users)
 
-        st.write("Databases:", data["databases"])
-        st.write("Users:", data["users"])
+        with tabs[1]:
+            st.write("Delete a user:")
+            users = api_admin_list_users()
+            if users:
+                user_to_delete = st.selectbox("Select user", users)
+                confirm = st.checkbox(f"Confirm delete `{user_to_delete}`")
+                if st.button("Delete User"):
+                    if confirm:
+                        if api_admin_delete(user_to_delete):
+                            st.success(f"User `{user_to_delete}` deleted successfully!")
+                            st.rerun()
+                        else: st.error("Error deleting user.")
+                    else: st.warning("Please confirm deletion first.")
+            else: st.info("No users found.")
 
-        db_select = st.selectbox(
-            "Select database to view tables",
-            data["databases"]
+        with tabs[2]:
+            st.write("Execute SQL on admin database:")
+            st.caption("Tip: Use `db_username.table` to access user data.")
+            
+            ace_themes = ["dracula", "monokai", "github", "tomorrow", "twilight", "xcode", "solarized_dark", "solarized_light", "terminal"]
+            selected_theme = st.selectbox("Select ACE Editor Theme", ace_themes)
+            
+            sql_query = st_ace(
+                value="", language="sql", theme=selected_theme, height=300,
+                key="admin_sql_editor", font_size=14, tab_size=4, show_gutter=True, wrap=True,
+                placeholder="SHOW DATABASES;"
+            )
+            
+            if sql_query.strip() and sql_query != st.session_state.get("last_executed_sql"):
+                st.session_state["last_executed_sql"] = sql_query
+                # 1. Add to History (FIXED)
+                st.session_state["query_history"].append(sql_query)
+                
+                # 2. Run
+                result = api_execute(username, st.session_state["password"], sql_query)
+                
+                if result.get("status") == "success":
+                    if "rows" in result:
+                        df = pd.DataFrame(result["rows"], columns=result["columns"])
+                        st.dataframe(df, use_container_width=True)
+                    else: st.success(result.get("message"))
+                else: st.error(result.get("message"))
+            
+            # 3. Show History (FIXED)
+            if st.session_state.get("query_history"):
+                st.subheader("Query History")
+                for i, q in enumerate(reversed(st.session_state["query_history"]), 1):
+                    st.code(f"{i}: {q}", language="sql")
+
+    # --- USER DASHBOARD ---
+    else:
+        st.subheader(f"User Dashboard - {username}")
+        st.write(f"Hello {username}! Practice SQL below:")
+
+        ace_themes = ["dracula", "monokai", "github", "tomorrow", "twilight", "xcode", "solarized_dark", "solarized_light", "terminal"]
+        selected_theme = st.selectbox("Select ACE Editor Theme", ace_themes)
+        
+        sql_query = st_ace(
+            value="", language="sql", theme=selected_theme, height=300,
+            key="sql_editor", font_size=14, tab_size=4, show_gutter=True, wrap=True,
+            placeholder="Write your SQL query here..."
         )
 
-        if db_select:
-            r2 = requests.get(
-                f"{API_BASE}/admin/list_tables",
-                params={
-                    "token": st.session_state.admin_token,
-                    "database": db_select
-                }
-            )
-            if r2.status_code == 200:
-                st.write("Tables:", r2.json()["tables"])
+        if sql_query.strip() and sql_query != st.session_state.get("last_executed_sql"):
+            st.session_state["last_executed_sql"] = sql_query
+            st.session_state["query_history"].append(sql_query)
+            
+            result = api_execute(username, st.session_state["password"], sql_query)
+
+            if result.get("status") == "success":
+                if "rows" in result:
+                    df = pd.DataFrame(result["rows"], columns=result["columns"])
+                    st.dataframe(df, use_container_width=True)
+                else: st.success(result.get("message"))
+            else: st.error(result.get("message"))
+
+        if st.session_state.get("query_history"):
+            st.subheader("Query History")
+            for i, q in enumerate(reversed(st.session_state["query_history"]), 1):
+                st.code(f"{i}: {q}", language="sql")
 
 
-    # ---- Manage Users
-    with tabs[2]:
-        st.subheader("❌ Delete User")
-        r = requests.get(f"{API_BASE}/admin/list", params={"token": st.session_state.admin_token})
-        if r.status_code == 200:
-            users = [u for u in r.json()["users"] if u.startswith("user_")]
-            del_user = st.selectbox("Select user to delete", users)
-            if st.button("Delete User"):
-                username = del_user.replace("user_", "")
-                r = requests.post(f"{API_BASE}/admin/delete_user", json={"token": st.session_state.admin_token, "username": username})
-                if r.status_code == 200:
-                    st.success(f"User {username} deleted")
-                else:
-                    st.error(r.json().get("detail"))
