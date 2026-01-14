@@ -159,7 +159,18 @@ if st.session_state["token"]:
             st.write("Execute SQL on admin database:")
             st.caption("Tip: Use `db_username.table` to access user data.")
             
-            ace_themes = ["dracula", "monokai", "github", "tomorrow", "twilight", "xcode", "solarized_dark", "solarized_light", "terminal"]
+            ace_themes = [
+                            # --- Dark Themes ---
+                            "cobalt", "solarized_dark", "ambiance", "chaos", "clouds_midnight", "dracula", "gob", "gruvbox", 
+                            "idle_fingers", "kr_theme", "merbivore", "merbivore_soft", "mono_industrial", "monokai", 
+                            "pastel_on_dark", "terminal", "tomorrow_night", "tomorrow_night_blue", 
+                            "tomorrow_night_bright", "tomorrow_night_eighties", "twilight", "vibrant_ink",
+
+                            # --- Light Themes ---
+                            "chrome", "clouds", "crimson_editor", "dawn", "dreamweaver", "eclipse", "github", 
+                            "iplastic", "katzenmilch", "kuroir", "solarized_light", "sqlserver", "textmate", 
+                            "tomorrow", "xcode"
+                        ]
             selected_theme = st.selectbox("Select ACE Editor Theme", ace_themes)
             
             sql_query = st_ace(
@@ -194,7 +205,11 @@ if st.session_state["token"]:
         st.subheader(f"User Dashboard - {username}")
         st.write(f"Hello {username}! Practice SQL below:")
 
-        ace_themes = ["dracula", "monokai", "github", "tomorrow", "twilight", "xcode", "solarized_dark", "solarized_light", "terminal"]
+        ace_themes = [
+                        # --- Light Themes ---
+                        "xcode", "chrome", "clouds", "crimson_editor", "dawn", "dreamweaver", "eclipse", "github", 
+                        "iplastic", "katzenmilch", "kuroir", "solarized_light", "sqlserver", "textmate", "tomorrow"
+                    ]
         selected_theme = st.selectbox("Select ACE Editor Theme", ace_themes)
         
         sql_query = st_ace(
